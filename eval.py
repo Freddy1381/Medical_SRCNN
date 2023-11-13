@@ -61,7 +61,9 @@ if __name__ == '__main__':
                                             data_range=255.)
                 PSNRs.update(psnr, lr_imgs.size(0))
                 SSIMs.update(ssim, lr_imgs.size(0))
-                print(f"{round((i / len(test_loader) * 100), 2)}% done......")
+
+                if i % 100 == 0:
+                    print(f"{round((i / len(test_loader)) * 100, 2)}% done.....")
 
         # Print average PSNR and SSIM
         print('PSNR - {psnrs.avg:.3f}'.format(psnrs=PSNRs))
