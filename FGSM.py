@@ -3,7 +3,6 @@ from utils import *
 from PIL import Image
 from datasets import SRDataset
 import torch.nn.functional as F
-from torch.autograd import Variable
 from skimage.metrics import peak_signal_noise_ratio, structural_similarity
 
 if __name__ == '__main__':
@@ -12,7 +11,12 @@ if __name__ == '__main__':
     # Data
     data_folder = "./"
     test_data_names = ['IXI-T1-test']
-    epsilon = 0.3
+    example_folder = "./adversarial_examples/FGSM"
+    output_folder = "./adversarial_outputs/FGSM"
+    os.makedirs(example_folder, exist_ok=True)
+    os.makedirs(output_folder, exist_ok=True)
+
+    epsilon = 8/255
 
     # Model checkpoints
     # srgan_checkpoint = "./checkpoint_srgan.pth.tar"
@@ -48,6 +52,8 @@ if __name__ == '__main__':
 
         # Batches
         for i, (lr_imgs, hr_imgs) in enumerate(test_loader):
+            if i >= 100:
+                break
             # Move to default device
             lr_imgs = lr_imgs.to(device)  # (batch_size (1), 3, w / 4, h / 4), imagenet-normed
             # lr_imgs_var = Variable(lr_imgs, requires_grad=True)
@@ -67,6 +73,20 @@ if __name__ == '__main__':
 
             # Forward prop. with the perturbed image
             adversarial_sr_imgs = model(perturbed_imgs)
+
+            # Convert tensor to PIL Image for perturbed image
+            perturbed_img_pil = convert_image(perturbed_imgs.cpu().detach().squeeze(0), source='[-1, 1]', target='pil')
+
+            # Save perturbed image
+            perturbed_img_path = os.path.join(example_folder, f'perturbed_img_{i}.png')
+            perturbed_img_pil.save(perturbed_img_path)
+
+            # Convert tensor to PIL Image for adversarial super-resolved image
+            adv_sr_img_pil = convert_image(adversarial_sr_imgs.cpu().detach().squeeze(0), source='[-1, 1]', target='pil')
+
+            # Save adversarial super-resolved image
+            adv_sr_img_path = os.path.join(output_folder, f'adversarial_sr_img_{i}.png')
+            adv_sr_img_pil.save(adv_sr_img_path)
 
             # Calculate PSNR and SSIM for the adversarial example
             adv_sr_imgs_y = convert_image(adversarial_sr_imgs, source='[-1, 1]', target='y-channel').squeeze(0)
