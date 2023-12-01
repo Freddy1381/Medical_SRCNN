@@ -148,7 +148,7 @@ class SRResNet(nn.Module):
         assert scaling_factor in {2, 4, 8}, "The scaling factor must be 2, 4, or 8!"
 
         # The first convolutional block
-        self.conv_block1 = ConvolutionalBlock(in_channels=3, out_channels=n_channels, kernel_size=large_kernel_size,
+        self.conv_block1 = ConvolutionalBlock(in_channels=1, out_channels=n_channels, kernel_size=large_kernel_size,
                                               batch_norm=False, activation='PReLu')
 
         # A sequence of n_blocks residual blocks, each containing a skip-connection across the block
@@ -167,23 +167,23 @@ class SRResNet(nn.Module):
               in range(n_subpixel_convolution_blocks)])
 
         # The last convolutional block
-        self.conv_block3 = ConvolutionalBlock(in_channels=n_channels, out_channels=3, kernel_size=large_kernel_size,
+        self.conv_block3 = ConvolutionalBlock(in_channels=n_channels, out_channels=1, kernel_size=large_kernel_size,
                                               batch_norm=False, activation='Tanh')
 
     def forward(self, lr_imgs):
         """
         Forward prop.
 
-        :param lr_imgs: low-resolution input images, a tensor of size (N, 3, w, h)
-        :return: super-resolution output images, a tensor of size (N, 3, w * scaling factor, h * scaling factor)
+        :param lr_imgs: low-resolution input images, a tensor of size (N, 1, w, h)
+        :return: super-resolution output images, a tensor of size (N, 1, w * scaling factor, h * scaling factor)
         """
-        output = self.conv_block1(lr_imgs)  # (N, 3, w, h)
+        output = self.conv_block1(lr_imgs)  # (N, 1, w, h)
         residual = output  # (N, n_channels, w, h)
         output = self.residual_blocks(output)  # (N, n_channels, w, h)
         output = self.conv_block2(output)  # (N, n_channels, w, h)
         output = output + residual  # (N, n_channels, w, h)
         output = self.subpixel_convolutional_blocks(output)  # (N, n_channels, w * scaling factor, h * scaling factor)
-        sr_imgs = self.conv_block3(output)  # (N, 3, w * scaling factor, h * scaling factor)
+        sr_imgs = self.conv_block3(output)  # (N, 1, w * scaling factor, h * scaling factor)
 
         return sr_imgs
 
@@ -244,7 +244,7 @@ class Discriminator(nn.Module):
         """
         super(Discriminator, self).__init__()
 
-        in_channels = 3
+        in_channels = 1
 
         # A series of convolutional blocks
         # The first, third, fifth (and so on) convolutional blocks increase the number of channels but retain image size
@@ -252,10 +252,10 @@ class Discriminator(nn.Module):
         # The first convolutional block is unique because it does not employ batch normalization
         conv_blocks = list()
         for i in range(n_blocks):
-            out_channels = (n_channels if i is 0 else in_channels * 2) if i % 2 is 0 else in_channels
+            out_channels = (n_channels if i == 0 else in_channels * 2) if i % 2 == 0 else in_channels
             conv_blocks.append(
                 ConvolutionalBlock(in_channels=in_channels, out_channels=out_channels, kernel_size=kernel_size,
-                                   stride=1 if i % 2 is 0 else 2, batch_norm=i is not 0, activation='LeakyReLu'))
+                                   stride=1 if i % 2 == 0 else 2, batch_norm=i != 0, activation='LeakyReLu'))
             in_channels = out_channels
         self.conv_blocks = nn.Sequential(*conv_blocks)
 

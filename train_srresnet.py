@@ -19,11 +19,11 @@ n_blocks = 16  # number of residual blocks
 
 # Learning parameters
 checkpoint = None  # path to model checkpoint, None if none
-batch_size = 16  # batch size
+batch_size = 64  # batch size
 start_epoch = 0  # start at this epoch
-iterations = 1e6  # number of training iterations
+iterations = 50000  # number of training iterations
 workers = 4  # number of workers for loading data in the DataLoader
-print_freq = 500  # print training status once every __ batches
+print_freq = 440  # print training status once every __ batches
 lr = 1e-4  # learning rate
 grad_clip = None  # clip if gradients are exploding
 
@@ -67,8 +67,8 @@ def main():
                                                pin_memory=True)  # note that we're passing the collate function here
 
     # Total number of epochs to train for
-    # epochs = int(iterations // len(train_loader) + 1)
-    epochs = 100
+    epochs = int(iterations // len(train_loader) + 1)
+    
 
     # Epochs
     for epoch in range(start_epoch, epochs):

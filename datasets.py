@@ -4,6 +4,7 @@ import json
 import os
 from PIL import Image
 from utils import ImageTransforms
+from torchvision import transforms
 
 
 class SRDataset(Dataset):
@@ -29,6 +30,7 @@ class SRDataset(Dataset):
         self.lr_img_type = lr_img_type
         self.hr_img_type = hr_img_type
         self.test_data_name = test_data_name
+        self.grayscale_transform = transforms.Grayscale(num_output_channels=1)
 
         assert self.split in {'train', 'test'}
         if self.split == 'test' and self.test_data_name is None:
@@ -69,6 +71,8 @@ class SRDataset(Dataset):
         if img.width <= 96 or img.height <= 96:
             print(self.images[i], img.width, img.height)
         lr_img, hr_img = self.transform(img)
+        lr_img = self.grayscale_transform(lr_img)
+        hr_img = self.grayscale_transform(hr_img)
 
         return lr_img, hr_img
 

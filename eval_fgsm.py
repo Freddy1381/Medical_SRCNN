@@ -1,4 +1,5 @@
 import torch
+import numpy as np
 from utils import *
 from PIL import Image
 from datasets import SRDataset
@@ -16,11 +17,11 @@ if __name__ == '__main__':
     os.makedirs(example_folder, exist_ok=True)
     os.makedirs(output_folder, exist_ok=True)
 
-    epsilon = 8/255
+    epsilon = 1/255
 
     # Model checkpoints
     # srgan_checkpoint = "./checkpoint_srgan.pth.tar"
-    srresnet_checkpoint = "./checkpoint_srresnet_nifti.pth.tar"
+    srresnet_checkpoint = "./checkpoint_srresnet.pth.tar"
 
     # Load model, either the SRResNet or the SRGAN
     srresnet = torch.load(srresnet_checkpoint)['model'].to(device)
@@ -58,24 +59,31 @@ if __name__ == '__main__':
             lr_imgs = lr_imgs.to(device)  # (batch_size (1), 3, w / 4, h / 4), imagenet-normed
             # lr_imgs_var = Variable(lr_imgs, requires_grad=True)
             hr_imgs = hr_imgs.to(device)  # (batch_size (1), 3, w, h), in [-1, 1]
-            hr_imgs_y = convert_image(hr_imgs, source='[-1, 1]', target='y-channel').squeeze(0)  # (w, h), in y-channel
-    
+            hr_imgs_y = convert_image(hr_imgs, 
+                                      source='[-1, 1]', 
+                                      target='[0, 255]')
+            hr_imgs_np = np.squeeze(hr_imgs_y.cpu().numpy())
+
             # Forward prop.
             sr_imgs = model(lr_imgs)  # (1, 3, w, h), in [-1, 1]
 
-            perturbed_imgs = lr_imgs.clone().detach().requires_grad_(True)
-            loss = F.mse_loss(model(perturbed_imgs), hr_imgs)
+            ori_images = lr_imgs.clone().detach().requires_grad_(True)
+            loss = F.mse_loss(model(ori_images), hr_imgs)
             model.zero_grad()
             loss.backward(retain_graph=True)
 
             # Create perturbed image using FGSM
-            perturbed_imgs.data = perturbed_imgs.data + epsilon * torch.sign(perturbed_imgs.grad.data)
+            perturbed_imgs = ori_images.data + epsilon * torch.sign(ori_images.grad.data)
+            perturbed_imgs = torch.clamp(perturbed_imgs, min=-1, max=1)
 
             # Forward prop. with the perturbed image
             adversarial_sr_imgs = model(perturbed_imgs)
+            adversarial_sr_imgs = torch.clamp(adversarial_sr_imgs, min=-1, max=1)
 
             # Convert tensor to PIL Image for perturbed image
-            perturbed_img_pil = convert_image(perturbed_imgs.cpu().detach().squeeze(0), source='[-1, 1]', target='pil')
+            perturbed_img_pil = convert_image(perturbed_imgs.cpu().detach().squeeze(0), 
+                                              source='[-1, 1]', 
+                                              target='pil')
 
             # Save perturbed image
             perturbed_img_path = os.path.join(example_folder, f'perturbed_img_{i}.png')
@@ -89,9 +97,16 @@ if __name__ == '__main__':
             adv_sr_img_pil.save(adv_sr_img_path)
 
             # Calculate PSNR and SSIM for the adversarial example
-            adv_sr_imgs_y = convert_image(adversarial_sr_imgs, source='[-1, 1]', target='y-channel').squeeze(0)
-            psnr_adv = peak_signal_noise_ratio(hr_imgs_y.cpu().detach().numpy(), adv_sr_imgs_y.cpu().detach().numpy(), data_range=255.)
-            ssim_adv = structural_similarity(hr_imgs_y.cpu().detach().numpy(), adv_sr_imgs_y.cpu().detach().numpy(), data_range=255.)
+            adv_sr_imgs_y = convert_image(adversarial_sr_imgs, 
+                                          source='[-1, 1]', 
+                                          target='[0, 255]')
+            adv_sr_imgs_np = np.squeeze(adv_sr_imgs_y.cpu().detach().numpy())
+            psnr_adv = peak_signal_noise_ratio(hr_imgs_np, 
+                                               adv_sr_imgs_np, 
+                                               data_range=255.)
+            ssim_adv = structural_similarity(hr_imgs_np, 
+                                             adv_sr_imgs_np, 
+                                             data_range=255.)
 
             PSNRs.update(psnr_adv, lr_imgs.size(0))
             SSIMs.update(ssim_adv, lr_imgs.size(0))
