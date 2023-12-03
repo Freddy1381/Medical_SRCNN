@@ -9,6 +9,10 @@ if __name__ == '__main__':
     # Data
     data_folder = "./"
     test_data_names = ['IXI-T1-test']
+    example_folder = "./adversarial_examples/Clean"
+    output_folder = "./adversarial_outputs/Clean"
+    os.makedirs(example_folder, exist_ok=True)
+    os.makedirs(output_folder, exist_ok=True)
 
     # Model checkpoints
     # srgan_checkpoint = "./checkpoint_srgan.pth.tar"
@@ -52,29 +56,39 @@ if __name__ == '__main__':
                 lr_imgs = lr_imgs.to(device)  # (batch_size (1), 1, w / 4, h / 4), imagenet-normed
                 hr_imgs = hr_imgs.to(device)  # (batch_size (1), 1, w, h), in [-1, 1]
 
+                # Convert tensor to PIL Image for perturbed image
+                lr_img_pil = convert_image(lr_imgs.cpu().detach().squeeze(0), 
+                                                  source='[-1, 1]', 
+                                                  target='pil')
+                
+                # Save clean low-res image
+                clean_lr_img_path = os.path.join(example_folder, f'example_img_{i}.png')
+                lr_img_pil.save(clean_lr_img_path)
+
                 # Forward prop.
                 sr_imgs = model(lr_imgs)  # (1, 1, w, h), in [-1, 1]
 
+                # Convert tensor to PIL Image for clean super-resolved image
+                clean_sr_img_pil = convert_image(sr_imgs.cpu().detach().squeeze(0), source='[-1, 1]', target='pil')
+
+                # Save clean super-resolved image
+                clean_sr_img_path = os.path.join(output_folder, f'output_img_{i}.png')
+                clean_sr_img_pil.save(clean_sr_img_path)
+
                 # Calculate PSNR and SSIM
-                hr_imgs_y = convert_image(hr_imgs, source='[-1, 1]', target='[0, 255]')
-                sr_imgs_y = convert_image(sr_imgs, source='[-1, 1]', target='[0, 255]')
-                hr_imgs_np = hr_imgs_y.cpu().numpy()
-                sr_imgs_np = sr_imgs_y.cpu().numpy()
-                psnr = peak_signal_noise_ratio(np.squeeze(hr_imgs_np), 
-                                               np.squeeze(sr_imgs_np), 
-                                               data_range=255)
-                ssim = structural_similarity(np.squeeze(hr_imgs_np), 
-                                             np.squeeze(sr_imgs_np),
-                                             data_range=255, 
-                                             channel_axis=None)
+                psnr = get_psnr(hr_imgs, sr_imgs)
+                ssim = get_ssim(hr_imgs, sr_imgs)
                 PSNRs.update(psnr, lr_imgs.size(0))
                 SSIMs.update(ssim, lr_imgs.size(0))
 
                 if i % 100 == 0:
-                    print(f"{round((i / len(test_loader)) * 100, 2)}% done.....")
+                    print(f"{round(i / len(test_loader) * 100)}% done......")
 
         # Print average PSNR and SSIM
         print('PSNR - {psnrs.avg:.3f}'.format(psnrs=PSNRs))
         print('SSIM - {ssims.avg:.3f}'.format(ssims=SSIMs))
+        
+        update_results_csv('Clean', 0, PSNRs.avg, SSIMs.avg)
 
+    del lr_imgs, hr_imgs, sr_imgs
     print("\n")

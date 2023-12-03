@@ -1,10 +1,16 @@
 from PIL import Image
+import numpy as np
+import pandas as pd
 import os
 import json
 import random
 import torchvision.transforms.functional as FT
+from skimage.metrics import peak_signal_noise_ratio, structural_similarity
 import torch
+import torch.nn as nn
+from pytorch_msssim import ssim as SSIM
 import math
+from datetime import datetime
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -15,6 +21,62 @@ imagenet_std = torch.FloatTensor([0.229, 0.224, 0.225]).unsqueeze(1).unsqueeze(2
 imagenet_mean_cuda = torch.FloatTensor([0.485, 0.456, 0.406]).to(device).unsqueeze(0).unsqueeze(2).unsqueeze(3)
 imagenet_std_cuda = torch.FloatTensor([0.229, 0.224, 0.225]).to(device).unsqueeze(0).unsqueeze(2).unsqueeze(3)
 
+
+def get_psnr(hr_imgs, adversarial_sr_imgs):
+    # Calculate PSNR and SSIM
+    hr_imgs_y = convert_image(hr_imgs, 
+                            source='[-1, 1]', 
+                            target='[0, 255]')
+    hr_imgs_np = np.squeeze(hr_imgs_y.cpu().numpy())
+    adv_sr_imgs_y = convert_image(adversarial_sr_imgs, 
+                                source='[-1, 1]', 
+                                target='[0, 255]')
+    adv_sr_imgs_np = np.squeeze(adv_sr_imgs_y.cpu().detach().numpy())
+    psnr = peak_signal_noise_ratio(hr_imgs_np, 
+                                adv_sr_imgs_np,
+                                data_range=255.)
+    return psnr
+
+def get_ssim(hr_imgs, adversarial_sr_imgs):
+    # Calculate PSNR and SSIM
+    hr_imgs_y = convert_image(hr_imgs, 
+                            source='[-1, 1]', 
+                            target='[0, 255]')
+    hr_imgs_np = np.squeeze(hr_imgs_y.cpu().numpy())
+    adv_sr_imgs_y = convert_image(adversarial_sr_imgs, 
+                                source='[-1, 1]', 
+                                target='[0, 255]')
+    adv_sr_imgs_np = np.squeeze(adv_sr_imgs_y.cpu().detach().numpy())
+    ssim = structural_similarity(hr_imgs_np, 
+                                adv_sr_imgs_np,
+                                data_range=255.)
+    return ssim
+
+def update_results_csv(attack_method, parameter, psnr, ssim):
+    columns = ['DateTime', 'Attack Method', 'Epsilon/Confidence', 'PSNR', 'SSIM']
+
+    try:
+        results_df = pd.read_csv('Results.csv')
+    except FileNotFoundError:
+        results_df = pd.DataFrame(columns=columns)
+
+    current_datetime = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    new_row = pd.DataFrame([[current_datetime, attack_method, parameter, round(psnr, 3), round(ssim, 3)]], columns=columns)
+    results_df = pd.concat([results_df, new_row], ignore_index=True)
+    results_df.to_csv('Results.csv', index=False)
+
+class SSIMLoss(nn.Module):
+    def __init__(self):
+        super(SSIMLoss, self).__init__()
+
+    def forward(self, prediction, target):
+        prediction = (prediction + 1) / 2.0
+        target = (target + 1) / 2.0
+
+        # Calculate SSIM
+        ssim_value = 1 - SSIM(prediction, target)
+
+        return torch.mean(ssim_value)
 
 def create_data_lists(train_folders, test_folders, min_size, output_folder):
     """

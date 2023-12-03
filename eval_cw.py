@@ -5,11 +5,19 @@ from PIL import Image
 from datasets import SRDataset
 import torch.nn as nn
 import torch.optim as optim
-from skimage.metrics import peak_signal_noise_ratio, structural_similarity
 
-def carlini_wagner_attack(model, input_image, target_image, max_iterations=100, confidence=0, learning_rate=0.01):
+def tanh_space(x):
+    return 1 / 2 * (torch.tanh(x) + 1)
+
+def atanh(x):
+    return 0.5 * torch.log((1 + x) / (1 - x))
+
+def inverse_tanh_space(x):
+    return atanh(torch.clamp(x * 2 - 1, min=-1, max=1))
+
+def carlini_wagner_attack(model, input_image, target_image, confidence, max_iterations=100, learning_rate=0.01):
     """
-    Carlini-Wagner Attack Implementation for SRCNN in PyTorch.
+    Carlini-Wagner Attack Implementation for SRCNN in PyTorch. Took inspiration from torchattack's cw.py
 
     Parameters:
         - model: The PyTorch SRCNN model to be attacked.
@@ -25,26 +33,49 @@ def carlini_wagner_attack(model, input_image, target_image, max_iterations=100, 
     input_image = input_image.to(device)
     target_image = target_image.to(device)
 
-    criterion = nn.MSELoss()
-    optimizer = optim.Adam([input_image], lr=learning_rate)
+    w = inverse_tanh_space(input_image).detach()
+    w.requires_grad = True
 
-    for _ in range(max_iterations):
-        input_image.requires_grad = True
-        optimizer.zero_grad()
+    best_adv_images = input_image.clone().detach()
+    best_L2 = 1e10 * torch.ones(len(input_image)).to(device)
+    max_loss_index = 0
+    prev_cost = 1e10
+    dim = len(input_image.shape)
+
+    criterion = SSIMLoss()
+    optimizer = optim.Adam([w], lr=learning_rate)
+
+    for step in range(max_iterations):
+        adv_images = tanh_space(w)
+
+        current_L2 = criterion(adv_images, input_image)
+        L2_loss = current_L2.sum()
         output_image = model(input_image)
         loss = criterion(output_image, target_image).to(device)
+        cost = L2_loss + confidence * loss
 
-        # Add C&W loss term for non-targeted attacks
-        if confidence > 0:
-            output_max, _ = torch.max(output_image, dim=1, keepdim=True)
-            loss -= confidence * torch.sum(torch.max(output_max - output_image, dim=1)[0])
-
-        loss.backward()
+        optimizer.zero_grad()
+        cost.backward()
         optimizer.step()
 
-    perturbed_image = torch.clamp(input_image, min=-1, max=1).detach()
+        pre = torch.argmax(output_image.detach(), 1)
+        condition = (pre != target_image).float()
 
-    return perturbed_image
+        mask = condition * (best_L2 > current_L2.detach())
+        best_L2 = mask * current_L2.detach() + (1 - mask) * best_L2
+
+        mask = mask.view([-1] + [1] * (dim - 1))
+        max_loss_index = torch.argmax(mask).item()
+        best_adv_images = mask * adv_images.detach() + (1 - mask) * best_adv_images
+
+        # Early stop when loss does not converge.
+        # max(.,1) To prevent MODULO BY ZERO error in the next step.
+        if step % max(max_iterations // 10, 1) == 0:
+            if loss.item() > prev_cost:
+                return torch.clamp(best_adv_images[max_loss_index].unsqueeze(0), min=-1, max=1)
+            prev_cost = loss.item()
+    
+    return torch.clamp(best_adv_images[max_loss_index].unsqueeze(0), min=-1, max=1)
 
 if __name__ == '__main__':
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -56,6 +87,8 @@ if __name__ == '__main__':
     output_folder = "./adversarial_outputs/CW"
     os.makedirs(example_folder, exist_ok=True)
     os.makedirs(output_folder, exist_ok=True)
+
+    confidences = [0.1, 0.2, 0.25, 0.5, 0.8]
 
     # Model checkpoints
     # srgan_checkpoint = "./checkpoint_srgan.pth.tar"
@@ -72,6 +105,7 @@ if __name__ == '__main__':
     # Evaluate
     for test_data_name in test_data_names:
         print("\nFor %s:\n" % test_data_name)
+        print(f"Confidence = {confidences}")
 
         # Custom dataloader
         test_dataset = SRDataset(data_folder,
@@ -84,62 +118,59 @@ if __name__ == '__main__':
         test_loader = torch.utils.data.DataLoader(test_dataset, batch_size=1, shuffle=False, num_workers=4,
                                                   pin_memory=True)
 
-        # Keep track of the PSNRs and the SSIMs across batches
-        PSNRs = AverageMeter()
-        SSIMs = AverageMeter()
+        for confidence in confidences:
+            # Keep track of the PSNRs and the SSIMs across batches
+            PSNRs = AverageMeter()
+            SSIMs = AverageMeter()
 
-        # Batches
-        for i, (lr_imgs, hr_imgs) in enumerate(test_loader):
-            if i >= 100:
-                break
-            # Move to default device
-            lr_imgs = lr_imgs.to(device)  # (batch_size (1), 3, w / 4, h / 4), imagenet-normed
-            # lr_imgs_var = Variable(lr_imgs, requires_grad=True)
-            hr_imgs = hr_imgs.to(device)  # (batch_size (1), 3, w, h), in [-1, 1]
-            hr_imgs_y = convert_image(hr_imgs, 
-                                      source='[-1, 1]', 
-                                      target='[0, 255]')
-            hr_imgs_np = np.squeeze(hr_imgs_y.cpu().numpy())
+            # Batches
+            for i, (lr_imgs, hr_imgs) in enumerate(test_loader):
+                if i >= 1:
+                    break
+                # Move to default device
+                lr_imgs = lr_imgs.to(device)  # (batch_size (1), 1, w / 4, h / 4), imagenet-normed
+                hr_imgs = hr_imgs.to(device)  # (batch_size (1), 1, w, h), in [-1, 1]
 
-            perturbed_data = carlini_wagner_attack(model, lr_imgs, hr_imgs)
-            # Convert tensor to PIL Image for perturbed image
-            perturbed_img_pil = convert_image(perturbed_data.cpu().detach().squeeze(0), source='[-1, 1]', target='pil')
+                perturbed_data = carlini_wagner_attack(model, lr_imgs, hr_imgs, confidence=confidence)
+                # Convert tensor to PIL Image for perturbed image
+                perturbed_img_pil = convert_image(perturbed_data.cpu().detach().squeeze(0), 
+                                                  source='[-1, 1]', 
+                                                  target='pil')
 
-            # Save perturbed image
-            perturbed_img_path = os.path.join(example_folder, f'perturbed_img_{i}.png')
-            perturbed_img_pil.save(perturbed_img_path)
+                # Save perturbed image
+                example_epsilon_folder = os.path.join(example_folder, f'{confidence}')
+                os.makedirs(example_epsilon_folder, exist_ok=True)
+                perturbed_img_path = os.path.join(example_epsilon_folder, f'perturbed_img_{i}.png')
+                perturbed_img_pil.save(perturbed_img_path)
 
-            # Forward prop.
-            adversarial_sr_imgs = model(perturbed_data)  # (1, 1, w, h), in [-1, 1]
-            adversarial_sr_imgs = torch.clamp(adversarial_sr_imgs, min=-1, max=1)
+                # Forward prop.
+                adversarial_sr_imgs = model(perturbed_data)  # (1, 1, w, h), in [-1, 1]
+                # adversarial_sr_imgs = torch.clamp(adversarial_sr_imgs, min=-1, max=1)
 
-            # Convert tensor to PIL Image for adversarial super-resolved image
-            adv_sr_img_pil = convert_image(adversarial_sr_imgs.cpu().detach().squeeze(0), source='[-1, 1]', target='pil')
+                # Convert tensor to PIL Image for adversarial super-resolved image
+                adv_sr_img_pil = convert_image(adversarial_sr_imgs.cpu().detach().squeeze(0), source='[-1, 1]', target='pil')
 
-            # Save adversarial super-resolved image
-            adv_sr_img_path = os.path.join(output_folder, f'adversarial_sr_img_{i}.png')
-            adv_sr_img_pil.save(adv_sr_img_path)
+                # Save adversarial super-resolved image
+                output_epsilon_folder = os.path.join(output_folder, f'{confidence}')
+                os.makedirs(output_epsilon_folder, exist_ok=True)
+                adv_sr_img_path = os.path.join(output_epsilon_folder, f'adversarial_sr_img_{i}.png')
+                adv_sr_img_pil.save(adv_sr_img_path)
 
-            # Calculate PSNR and SSIM
-            adv_sr_imgs_y = convert_image(adversarial_sr_imgs, 
-                                          source='[-1, 1]', 
-                                          target='[0, 255]')
-            adv_sr_imgs_np = np.squeeze(adv_sr_imgs_y.cpu().detach().numpy())
+                # Calculate PSNR and SSIM
+                psnr = get_psnr(hr_imgs, adversarial_sr_imgs)
+                ssim = get_ssim(hr_imgs, adversarial_sr_imgs)
+                PSNRs.update(psnr, lr_imgs.size(0))
+                SSIMs.update(ssim, lr_imgs.size(0))
 
-            psnr = peak_signal_noise_ratio(hr_imgs_np, 
-                                           adv_sr_imgs_np,
-                                           data_range=255.)
-            ssim = structural_similarity(hr_imgs_np, 
-                                         adv_sr_imgs_np,
-                                         data_range=255.)
-            PSNRs.update(psnr, lr_imgs.size(0))
-            SSIMs.update(ssim, lr_imgs.size(0))
+                if i % 100 == 0:
+                    print(f"{round(i / len(test_loader) * 100)}% done......")
 
-            if i % 100 == 0:
-                print(f"{round((i / len(test_loader) * 100), 2)}% done......")
+            # Print average PSNR and SSIM
+            print(f'Confidence: {confidence}')
+            print('PSNR - {psnrs.avg:.3f}'.format(psnrs=PSNRs))
+            print('SSIM - {ssims.avg:.3f}'.format(ssims=SSIMs))
 
-        # Print average PSNR and SSIM
-        print('PSNR - {psnrs.avg:.3f}'.format(psnrs=PSNRs))
-        print('SSIM - {ssims.avg:.3f}'.format(ssims=SSIMs))
+            update_results_csv('CW', confidence, PSNRs.avg, SSIMs.avg)
 
-    print("\n")
+            del lr_imgs, hr_imgs, perturbed_data, adversarial_sr_imgs
+        print("\n")

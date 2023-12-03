@@ -1,2 +1,5 @@
 images/
 .idea/
+adversarial_examples/
+adversarial_outputs/
+grad/

@@ -67,7 +67,7 @@ class SRDataset(Dataset):
         """
         # Read image
         img = Image.open(self.images[i], mode='r')
-        img = img.convert('RGB')
+        img = img.convert('L')
         if img.width <= 96 or img.height <= 96:
             print(self.images[i], img.width, img.height)
         lr_img, hr_img = self.transform(img)

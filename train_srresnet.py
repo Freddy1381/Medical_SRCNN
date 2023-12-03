@@ -18,12 +18,12 @@ n_channels = 64  # number of channels in-between, i.e. the input and output chan
 n_blocks = 16  # number of residual blocks
 
 # Learning parameters
-checkpoint = None  # path to model checkpoint, None if none
+checkpoint = "./checkpoint_srresnet.pth.tar"  # path to model checkpoint, None if none
 batch_size = 64  # batch size
 start_epoch = 0  # start at this epoch
 iterations = 50000  # number of training iterations
 workers = 4  # number of workers for loading data in the DataLoader
-print_freq = 440  # print training status once every __ batches
+print_freq = 149  # print training status once every __ batches
 lr = 1e-4  # learning rate
 grad_clip = None  # clip if gradients are exploding
 
@@ -54,7 +54,7 @@ def main():
 
     # Move to default device
     model = model.to(device)
-    criterion = nn.MSELoss().to(device)
+    criterion = SSIMLoss().to(device)
 
     # Custom dataloaders
     train_dataset = SRDataset(data_folder,
@@ -109,11 +109,11 @@ def train(train_loader, model, criterion, optimizer, epoch):
         data_time.update(time.time() - start)
 
         # Move to default device
-        lr_imgs = lr_imgs.to(device)  # (batch_size (N), 3, 24, 24), imagenet-normed
-        hr_imgs = hr_imgs.to(device)  # (batch_size (N), 3, 96, 96), in [-1, 1]
+        lr_imgs = lr_imgs.to(device)  # (batch_size (N), 1, 24, 24), imagenet-normed
+        hr_imgs = hr_imgs.to(device)  # (batch_size (N), 1, 96, 96), in [-1, 1]
 
         # Forward prop.
-        sr_imgs = model(lr_imgs)  # (N, 3, 96, 96), in [-1, 1]
+        sr_imgs = model(lr_imgs)  # (N, 1, 96, 96), in [-1, 1]
 
         # Loss
         loss = criterion(sr_imgs, hr_imgs)  # scalar
@@ -143,7 +143,7 @@ def train(train_loader, model, criterion, optimizer, epoch):
             print('Epoch: [{0}/{1}][{2}/{3}]----'
                   'Batch Time {batch_time.val:.3f} ({batch_time.avg:.3f})----'
                   'Data Time {data_time.val:.3f} ({data_time.avg:.3f})----'
-                  'Loss {loss.val:.4f} ({loss.avg:.4f})'.format(epoch, epochs, i, len(train_loader),
+                  'Loss {loss.val:.6f} ({loss.avg:.6f})'.format(epoch, epochs, i, len(train_loader),
                                                                     batch_time=batch_time,
                                                                     data_time=data_time, loss=losses))
     del lr_imgs, hr_imgs, sr_imgs  # free some memory since their histories may be stored
