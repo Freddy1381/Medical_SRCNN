@@ -2,39 +2,45 @@ import numpy as np
 from utils import *
 from skimage.metrics import peak_signal_noise_ratio, structural_similarity
 from datasets import SRDataset
+import torch.nn.functional as F
 import torch.nn as nn
 import torch
 
+class ZOOAttack:
+    def __init__(self, model, alpha, beta=0.1, iterations=10):
+        self.model = model
+        self.alpha = alpha
+        self.beta = beta
+        self.iterations = iterations
 
-def zoo_attack(model, images, alpha=0.01, beta=0.001, iterations=10):
+    def attack(self, input_image):
+        # Set the model to evaluation mode
+        self.model.eval()
+        input_image = input_image.to(device)
 
-    adversarial_image = images.to(device)
+        for _ in range(self.iterations):
+            gradient = torch.zeros_like(input_image)
 
-    for _ in range(iterations):
-        gradient = torch.zeros_like(adversarial_image)
+            original_value = input_image.data
 
-        original_value = adversarial_image[0, 0, :, :]
+            # Perturb the pixel value positively
+            perturbed_plus = original_value + self.beta
+            output_plus = self.model(perturbed_plus)
 
-        # Perturb the pixel value positively
-        adversarial_image[0, 0, :, :] = original_value + beta
-        output_plus = model(adversarial_image)
+            # Perturb the pixel value negatively
+            perturbed_minus = original_value - self.beta
+            output_minus = self.model(perturbed_minus)
 
-        # Perturb the pixel value negatively
-        adversarial_image[0, 0, :, :] = original_value - beta
-        output_minus = model(adversarial_image)
+            # Approximate gradient (central difference) & downsample gradient
+            gradient = (output_plus - output_minus) / (2 * self.beta)
+            gradient = F.interpolate(gradient, size=input_image.shape[2:], mode='bicubic', align_corners=True)
 
-        # Approximate gradient (central difference)
-        gradient[0, 0, :, :] = (output_plus - output_minus) / (2 * beta)
+            # Update adversarial image
+            grad = self.alpha * torch.sign(gradient)
+            input_image = torch.clamp(input_image + grad, min=-1, max=1)
 
-        # Reset pixel value
-        adversarial_image[0, 0, :, :] = original_value
-
-        # Update adversarial image
-        grad = alpha * np.sign(gradient)
-        adversarial_image = torch.clamp(adversarial_image + grad,  min=-1, max=1)
-
-    return adversarial_image, grad
-
+        # Return the perturbed image
+        return input_image.detach(), grad
 
 if __name__ == '__main__':
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -78,14 +84,13 @@ if __name__ == '__main__':
         test_loader = torch.utils.data.DataLoader(test_dataset, batch_size=1, shuffle=False, num_workers=4,
                                                   pin_memory=True)
         for epsilon in epsilons:
+            zoo_attack = ZOOAttack(model, alpha=epsilon)
             # Keep track of the PSNRs and the SSIMs across batches
             PSNRs = AverageMeter()
             SSIMs = AverageMeter()
 
             # Batches
             for i, (lr_imgs, hr_imgs) in enumerate(test_loader):
-                if i >= 10:
-                    break
                 # Move to default device
                 lr_imgs = lr_imgs.to(device)  # (batch_size (1), 1, w / 4, h / 4), imagenet-normed
                 hr_imgs = hr_imgs.to(device)  # (batch_size (1), 1, w, h), in [-1, 1]
@@ -95,7 +100,7 @@ if __name__ == '__main__':
                 hr_imgs_np = np.squeeze(hr_imgs_y.cpu().numpy())
 
                 # Call PGD Attack
-                perturbed_imgs, grad_data = zoo_attack(model, images=lr_imgs, alpha=epsilon)
+                perturbed_imgs, grad_data = zoo_attack.attack(lr_imgs)
 
                 # Convert tensor to PIL Image for perturbed image
                 perturbed_img_pil = convert_image(perturbed_imgs.cpu().detach().squeeze(0), 
