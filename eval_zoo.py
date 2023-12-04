@@ -7,36 +7,12 @@ import torch
 
 
 def zoo_attack(model, images, alpha=0.01, beta=0.001, iterations=10):
-    # images: the original image
-    # labels: the target class for the adversarial example
-    # alpha: learning rate for the attack
-    # beta: finite difference parameter
-    # iterations: number of iterations for the attack
 
     adversarial_image = images.to(device)
 
     for _ in range(iterations):
         gradient = torch.zeros_like(adversarial_image)
 
-        # # Approximate the gradient
-        # for x in range(adversarial_image.shape[2]):
-        #     for y in range(adversarial_image.shape[3]):
-        #         original_value = adversarial_image[0, 0, x, y]
-        #
-        #         # Perturb the pixel value positively
-        #         adversarial_image[0, 0, x, y] = original_value + beta
-        #         output_plus = model(adversarial_image)
-        #
-        #         # Perturb the pixel value negatively
-        #         adversarial_image[0, 0, x, y] = original_value - beta
-        #         output_minus = model(adversarial_image)
-        #
-        #         # Approximate gradient (central difference)
-        #         gradient[0, 0, x, y] = (output_plus - output_minus) / (2 * beta)
-        #
-        #         # Reset pixel value
-        #         adversarial_image[0, 0, x, y] = original_value
-        # Approximate the gradient
         original_value = adversarial_image[0, 0, :, :]
 
         # Perturb the pixel value positively
@@ -131,10 +107,12 @@ if __name__ == '__main__':
                 
                 # Forward prop. with the perturbed image
                 adversarial_sr_imgs = model(perturbed_imgs)
-                adversarial_sr_imgs = torch.clamp(adversarial_sr_imgs, min=-1, max=1)
+                # adversarial_sr_imgs = torch.clamp(adversarial_sr_imgs, min=-1, max=1)
                 
                 # Convert tensor to PIL Image for adversarial super-resolved image
-                adv_sr_img_pil = convert_image(adversarial_sr_imgs.cpu().detach().squeeze(0), source='[-1, 1]', target='pil')
+                adv_sr_img_pil = convert_image(adversarial_sr_imgs.cpu().detach().squeeze(0), 
+                                               source='[-1, 1]', 
+                                               target='pil')
 
                 # Save perturbed image
                 example_epsilon_folder = os.path.join(example_folder, f'{epsilon}')

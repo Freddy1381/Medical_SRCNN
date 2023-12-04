@@ -115,7 +115,9 @@ if __name__ == '__main__':
                 grad_data_pil.save(grad_data_path)
 
                 # Convert tensor to PIL Image for adversarial super-resolved image
-                adv_sr_img_pil = convert_image(adversarial_sr_imgs.cpu().detach().squeeze(0), source='[-1, 1]', target='pil')
+                adv_sr_img_pil = convert_image(adversarial_sr_imgs.cpu().detach().squeeze(0), 
+                                               source='[-1, 1]', 
+                                               target='pil')
 
                 # Save adversarial super-resolved image
                 output_epsilon_folder = os.path.join(output_folder, f'{epsilon}')
